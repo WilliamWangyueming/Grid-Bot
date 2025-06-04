@@ -1,0 +1,49 @@
+# Python 缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# 预测数据（用户生成的预测结果）
+prediction_data/*.csv
+prediction_data/*.json
+prediction_data/*.pkl
+
+# 配置文件中的敏感信息
+config.yaml.local
+*.key
+*.secret
+
+# 日志文件
+*.log
+logs/
+
+# IDE 和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Streamlit 临时文件
+.streamlit/
+
+# 测试覆盖率
+.coverage
+htmlcov/
+
+# 发布构建
+build/
+dist/
+*.egg-info/ 

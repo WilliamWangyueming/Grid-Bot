@@ -1,0 +1,9 @@
+@echo off
+echo 🤖 启动网格交易机器人...
+echo ================================
+cd /d "%~dp0"
+echo 📱 正在启动Streamlit服务器...
+echo 🌐 将自动打开浏览器页面...
+start http://localhost:8501
+streamlit run real_price_app.py --server.port 8501 --server.headless false --browser.gatherUsageStats false
+pause 

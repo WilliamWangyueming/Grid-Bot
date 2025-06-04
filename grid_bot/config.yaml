@@ -1,0 +1,8 @@
+symbol: "ALEOUSDT"
+lower_price: 0.18
+upper_price: 0.26
+grids: 30
+mode: "geometric"        # or arithmetic
+qty: 50                  # 每格挂单数量 (ALEO)
+fee_rate: 0.001          # 0.1 %
+trailing_k: 3            # 连破几格触发 trailing
