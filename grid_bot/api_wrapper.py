@@ -23,9 +23,13 @@ class MexcRest:
         if signed:
             params["timestamp"] = int(time.time()*1000)
             params["signature"] = self._sign(params)
-        if   m == "GET":    r = requests.get   (BASE_URL+path, params=params, headers={"X-MEXC-APIKEY": self.key}, timeout=10)
-        elif m == "DELETE": r = requests.delete(BASE_URL+path, params=params, headers={"X-MEXC-APIKEY": self.key}, timeout=10)
-        else:               r = requests.post  (BASE_URL+path, params=params, headers={"X-MEXC-APIKEY": self.key}, timeout=10)
+            hdrs = {"X-MEXC-APIKEY": self.key}
+        else:
+            hdrs = None  # 公共接口不携带 APIKEY，否则会被要求签名
+
+        if   m == "GET":    r = requests.get   (BASE_URL+path, params=params, headers=hdrs, timeout=10)
+        elif m == "DELETE": r = requests.delete(BASE_URL+path, params=params, headers=hdrs, timeout=10)
+        else:               r = requests.post  (BASE_URL+path, params=params, headers=hdrs, timeout=10)
         if not r.ok: print("[API]", r.status_code, r.text[:120])
         r.raise_for_status(); return r.json()
 
@@ -90,6 +94,21 @@ class MexcRest:
     def balance_of(self, asset): return self.get_balances().get(asset, Decimal(0))
     def start_user_stream(self):
         return self._request("POST", "/api/v3/userDataStream", signed=True)["listenKey"]
+
+    def get_klines(self, interval="1m", limit=500):
+        """获取历史K线数据，不需要签名
+        返回原始列表，元素结构见 /api/v3/klines 文档
+        """
+        try:
+            return self._request(
+                "GET",
+                "/api/v3/klines",
+                params={"symbol": self.symbol, "interval": interval, "limit": limit},
+                signed=False,
+            )
+        except Exception as e:
+            print("[API] 获取K线失败", e)
+            return []
 
 # ----------- WebSocket -----------
 import websocket

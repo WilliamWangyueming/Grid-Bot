@@ -1,0 +1,129 @@
+{
+  "usdt_balance": "10000.0",
+  "base_balance": "0",
+  "open_orders": {
+    "10000": {
+      "orderId": "10000",
+      "side": "BUY",
+      "price": 0.1927597357328516,
+      "quantity": 518.403318,
+      "grid_index": 115,
+      "timestamp": 1750000471.1090014
+    },
+    "10001": {
+      "orderId": "10001",
+      "side": "BUY",
+      "price": 0.19216402895196785,
+      "quantity": 518.403318,
+      "grid_index": 114,
+      "timestamp": 1750000471.1120012
+    },
+    "10002": {
+      "orderId": "10002",
+      "side": "BUY",
+      "price": 0.19157016314978978,
+      "quantity": 518.403318,
+      "grid_index": 113,
+      "timestamp": 1750000471.1155171
+    },
+    "10003": {
+      "orderId": "10003",
+      "side": "BUY",
+      "price": 0.19097813263693675,
+      "quantity": 518.403318,
+      "grid_index": 112,
+      "timestamp": 1750000471.1189358
+    },
+    "10004": {
+      "orderId": "10004",
+      "side": "BUY",
+      "price": 0.19038793174161073,
+      "quantity": 518.403318,
+      "grid_index": 111,
+      "timestamp": 1750000471.1216638
+    },
+    "10005": {
+      "orderId": "10005",
+      "side": "BUY",
+      "price": 0.1897995548095418,
+      "quantity": 518.403318,
+      "grid_index": 110,
+      "timestamp": 1750000471.124271
+    },
+    "10006": {
+      "orderId": "10006",
+      "side": "BUY",
+      "price": 0.18921299620393417,
+      "quantity": 518.403318,
+      "grid_index": 109,
+      "timestamp": 1750000471.1268673
+    },
+    "10007": {
+      "orderId": "10007",
+      "side": "BUY",
+      "price": 0.18862825030541194,
+      "quantity": 518.403318,
+      "grid_index": 108,
+      "timestamp": 1750000471.1294284
+    },
+    "10008": {
+      "orderId": "10008",
+      "side": "BUY",
+      "price": 0.18804531151196546,
+      "quantity": 518.403318,
+      "grid_index": 107,
+      "timestamp": 1750000471.1329353
+    },
+    "10009": {
+      "orderId": "10009",
+      "side": "BUY",
+      "price": 0.1874641742388976,
+      "quantity": 518.403318,
+      "grid_index": 106,
+      "timestamp": 1750000471.1359491
+    },
+    "10010": {
+      "orderId": "10010",
+      "side": "BUY",
+      "price": 0.18688483291877017,
+      "quantity": 518.403318,
+      "grid_index": 105,
+      "timestamp": 1750000471.1379483
+    },
+    "10011": {
+      "orderId": "10011",
+      "side": "BUY",
+      "price": 0.18630728200135074,
+      "quantity": 518.403318,
+      "grid_index": 104,
+      "timestamp": 1750000471.140948
+    },
+    "10012": {
+      "orderId": "10012",
+      "side": "BUY",
+      "price": 0.18573151595355933,
+      "quantity": 518.403318,
+      "grid_index": 103,
+      "timestamp": 1750000471.144458
+    },
+    "10013": {
+      "orderId": "10013",
+      "side": "BUY",
+      "price": 0.18515752925941542,
+      "quantity": 518.403318,
+      "grid_index": 102,
+      "timestamp": 1750000471.1479695
+    },
+    "10014": {
+      "orderId": "10014",
+      "side": "BUY",
+      "price": 0.1845853164199852,
+      "quantity": 518.403318,
+      "grid_index": 101,
+      "timestamp": 1750000471.1499703
+    }
+  },
+  "trade_history": [],
+  "start_time": 1750000470.8638175,
+  "order_id_counter": 10015
+}

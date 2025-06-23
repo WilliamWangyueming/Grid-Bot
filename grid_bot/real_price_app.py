@@ -7,6 +7,157 @@ from decimal import Decimal
 from streamlit_autorefresh import st_autorefresh
 from grid_config import GridConfig
 from real_price_grid_engine import RealPriceGridEngine
+import plotly.graph_objects as go
+
+# ===== K线加载与绘图（必须放在最前，供侧边栏使用） =====
+@st.cache_data(ttl=60, show_spinner=False)
+def load_klines(symbol: str, interval: str = "1h", limit: int = 200):
+    """从 MEXC 获取 K 线数据并返回 DataFrame，如遇无效周期自动降级。"""
+    from api_wrapper import MexcRest
+    api = MexcRest(symbol)
+
+    tried = []
+    for iv in [interval, "60m", "30m", "15m", "1m"]:
+        if iv in tried:
+            continue
+        tried.append(iv)
+        try:
+            raw = api.get_klines(iv, limit)
+            if raw:
+                interval = iv  # 使用成功的周期
+                break
+        except Exception as e:
+            # 可能是无效 interval，继续尝试
+            raw = []
+    if not raw:
+        return pd.DataFrame()
+
+    # 动态列名适配（MEXC 部分市场仅返回 8 列）
+    col_8  = ["openTime", "open", "high", "low", "close", "volume", "closeTime", "quoteAssetVolume"]
+    col_12 = col_8 + ["numTrades", "takerBaseVol", "takerQuoteVol", "ignore"]
+    cols   = col_12 if len(raw[0]) == 12 else col_8
+
+    df = pd.DataFrame(raw, columns=cols)
+    df["openTime"] = pd.to_datetime(df["openTime"], unit="ms")
+    df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
+    df.attrs["interval"] = interval
+    return df
+
+
+def render_kline_with_grid(container, symbol: str, cfg: GridConfig):
+    """绘制带网格线的 K 线图"""
+    df = load_klines(symbol)
+    if df.empty:
+        container.error("无法获取K线数据")
+        return
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=df["openTime"],
+                open=df["open"],
+                high=df["high"],
+                low=df["low"],
+                close=df["close"],
+                name="Kline",
+                increasing_line_color="#26a69a",
+                decreasing_line_color="#ef5350",
+            )
+        ]
+    )
+    for p in cfg.grid_lines:
+        fig.add_shape(type="line", x0=df["openTime"].iloc[0], x1=df["openTime"].iloc[-1], y0=float(p), y1=float(p), line=dict(color="rgba(0,0,255,0.2)", width=1, dash="dot"), layer="below")
+    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=300, showlegend=False, xaxis_rangeslider_visible=False)
+    container.plotly_chart(fig, use_container_width=True)
+
+# ===========================================================
+# UI 渲染函数 —— 必须放在最前，供后续逻辑调用
+# ===========================================================
+
+def _render_overview_tab(tab, stats: dict, symbol: str, runtime: float):
+    col1, col2, col3, col4, col5, col6 = tab.columns(6)
+    with col1:
+        tab.metric("当前价格", f"{stats['current_price']:.6f}")
+    with col2:
+        tab.metric("总价值(USDT)", f"{stats['total_value']:.2f}", f"{stats['total_value'] - 10000:+.2f}")
+    with col3:
+        pct = ((stats['total_value'] / 10000) - 1) * 100
+        tab.metric("收益率", f"{pct:.4f}%", f"{stats['roi']:.2%} 年化")
+    with col4:
+        tab.metric("完成对数", stats['pairs'])
+    with col5:
+        tab.metric("挂单数", stats['open'])
+    with col6:
+        tab.metric("当前网格", stats.get('current_grid', 'N/A'))
+
+def _render_orders_tab(tab, engine):
+    orders = engine.get_open_orders()
+    if not orders:
+        tab.info("暂无挂单")
+        return
+    data = []
+    for oid, (idx, side) in orders.items():
+        valid = 0 <= idx <= engine.cfg.N
+        price = float(engine.cfg.grid_price(idx)) if valid else 0
+        data.append({
+            "订单ID": oid,
+            "网格": idx if valid else f"{idx}(越界)",
+            "方向": side,
+            "价格": f"{price:.6f}" if valid else "错误",
+            "数量": f"{engine.cfg.qty:.6f}",
+            "价值": f"{price*float(engine.cfg.qty):.2f}" if valid else "错误",
+        })
+    def _clr(r):
+        return ["background-color:#90EE90" if r["方向"]=="BUY" else "background-color:#FFB6C1"]*len(r)
+    tab.dataframe(pd.DataFrame(data).style.apply(_clr, axis=1), use_container_width=True, height=380)
+
+def _render_grid_tab(tab, engine, stats):
+    cur_price = stats['current_price']
+    cur_idx = engine.cfg.price_to_grid_index(cur_price)
+    if cur_idx < 0 or cur_idx >= engine.cfg.N:
+        tab.warning("当前价格超出网格范围！")
+        return
+    orders = engine.get_open_orders()
+    rows = []
+    for i in range(engine.cfg.N):
+        has_buy = any(idx == i and s == 'BUY' for idx, s in orders.values())
+        has_sell = any(idx == i and s == 'SELL' for idx, s in orders.values())
+        rows.append({
+            "网格": i,
+            "买入价": f"{float(engine.cfg.get_buy_price(i)):.6f}",
+            "卖出价": f"{float(engine.cfg.get_sell_price(i)):.6f}",
+            "利润/格": f"{float(engine.cfg.profit_per_grid(i)):.4f}",
+            "状态": ("🟢买单 " if has_buy else "") + ("🔴卖单" if has_sell else "") or "⚪空闲",
+            "当前位置": "🎯" if i == cur_idx else "",
+        })
+    df = pd.DataFrame(rows)
+    tab.dataframe(df, use_container_width=True, height=450)
+
+def _render_trades_tab(tab, engine):
+    trades = engine.get_trade_history()
+    if not trades:
+        tab.info("暂无交易记录")
+        return
+    recent = trades[-10:]
+    rows = [{
+        "时间": time.strftime("%H:%M:%S", time.localtime(t.get('timestamp', time.time()))),
+        "方向": t['side'],
+        "价格": f"{float(t['price']):.6f}",
+        "数量": f"{float(t['quantity']):.6f}",
+        "网格": t.get('grid_index', 'N/A'),
+    } for t in recent]
+    df = pd.DataFrame(rows)
+    tab.dataframe(df, use_container_width=True, height=300)
+
+def render_running_ui(engine, stats, symbol, runtime):
+    t1, t2, t3, t4 = st.tabs(["📊 概览", "📋 挂单", "🎯 网格", "📈 交易记录"])
+    _render_overview_tab(t1, stats, symbol, runtime)
+    _render_orders_tab(t2, engine)
+    _render_grid_tab(t3, engine, stats)
+    _render_trades_tab(t4, engine)
+
+# ===========================================================
+# 以上为 UI 函数
+# ===========================================================
 
 # 页面配置
 st.set_page_config(
@@ -16,8 +167,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 自动刷新
-st_autorefresh(interval=3000, key="refresh")  # 3秒刷新一次
+# 自动刷新：仅在模拟运行时启用，并放宽到 5 秒，避免配置阶段的频繁刷新造成卡顿
+if st.session_state.get("real_simulation_engine"):
+    st_autorefresh(interval=5000, key="refresh")  # 5 秒刷新一次
 
 st.title("📈 真实价格网格交易模拟器")
 st.markdown("*使用真实API价格数据进行网格交易模拟，1,000,000 USDT虚拟资金*")
@@ -125,8 +277,36 @@ with st.sidebar:
         st.rerun()
     
     grids = st.number_input("网格数量", value=20, min_value=5, max_value=300, disabled=running)
-    
-    # 检查网格密度并给出建议
+
+    # 网格模式 & 手续费率（提前定义，供后续利润检查）
+    mode = st.selectbox("网格模式", ["geometric", "arithmetic"], disabled=running)
+    fee_rate = st.number_input("手续费率(%)", value=0.05, min_value=0.0, step=0.01, disabled=running) / 100
+
+    # ==== 新增：根据手续费检查单格利润是否为正，并给出建议 ====
+    def recommend_grids(current_n:int):
+        for n in range(current_n, 4, -1):
+            test_cfg = GridConfig(
+                symbol=symbol,
+                lower_price=lower_price,
+                upper_price=upper_price,
+                grids=n,
+                mode=mode,
+                fee_rate=fee_rate,
+                qty=1  # 数量设1，利润正负与数量无关
+            )
+            if min(test_cfg.profits) > 0:
+                return n
+        return 5
+
+    test_cfg = GridConfig(symbol, lower_price, upper_price, grids, mode, fee_rate, qty=1)
+    min_profit = float(min(test_cfg.profits))
+    if min_profit <= 0:
+        rec_n = recommend_grids(grids)
+        st.error(f"❌ 当前网格过密，最小单格净利润 {min_profit:.4f} USDT ≤ 0，建议将网格数量降低至 ≤ {rec_n}")
+    else:
+        st.info(f"✅ 最小单格净利润 {min_profit:.4f} USDT (已扣手续费)")
+
+    # ==== 原密度检查保留 ====
     if 'current_price' in st.session_state:
         current_price = st.session_state.get('current_price', 0.2)
         suggested_lower = st.session_state.get('suggested_lower', 0.18)
@@ -143,9 +323,6 @@ with st.sidebar:
         else:
             st.success(f"✅ 网格间距合理：{spacing_percent:.2f}%")
     
-    mode = st.selectbox("网格模式", ["geometric", "arithmetic"], disabled=running)
-    fee_rate = st.number_input("手续费率(%)", value=0.05, min_value=0.0, step=0.01, disabled=running) / 100
-    
     st.markdown("---")
     st.info("💡 网格范围已根据当前价格自动建议，你可以自定义修改")
     
@@ -155,6 +332,20 @@ with st.sidebar:
         st.warning("⚠️ 当前价格超出网格范围，建议调整!")
     else:
         st.success("✅ 当前价格在网格范围内")
+
+    # ===== K 线预览 =====
+    st.markdown("---")
+    st.markdown("### 🕯️ 价格走势图 & 网格预览")
+    preview_cfg = GridConfig(
+        symbol=symbol,
+        lower_price=lower_price,
+        upper_price=upper_price,
+        grids=grids,
+        mode=mode,
+        fee_rate=fee_rate,
+        qty=10.0,
+    )
+    render_kline_with_grid(st, symbol, preview_cfg)
 
 # 控制按钮
 col1, col2, col3 = st.columns(3)
@@ -182,6 +373,8 @@ def start_real_simulation():
     st.session_state["real_simulation_engine"] = engine
     st.session_state["real_start_time"] = time.time()
     st.success("🚀 真实价格模拟交易已启动！")
+    # 立即刷新，避免等待自动刷新才能看到运行界面
+    st.experimental_rerun()
 
 def stop_real_simulation():
     """停止真实价格模拟"""
@@ -229,296 +422,43 @@ if running:
     
     try:
         stats = engine.get_detailed_stats()
-        
-        # 运行时间
         runtime = time.time() - st.session_state.get("real_start_time", time.time())
+        # 计算当前所在网格索引
+        stats['current_grid'] = engine.cfg.price_to_grid_index(stats['current_price'])
+
+        # === 新 UI 布局 ===
+        render_running_ui(engine, stats, symbol, runtime)
+        st.stop()
         
-        # 主要指标
-        st.header("📈 实时数据（真实价格）")
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric(
-                "当前价格", 
-                f"{stats['current_price']:.6f}",
-                delta="真实价格"
-            )
-        
-        with col2:
-            st.metric(
-                "总价值(USDT)", 
-                f"{stats['total_value']:.2f}",
-                f"{stats['total_value'] - 10000:+.2f}"
-            )
-        
-        with col3:
-            profit_pct = ((stats['total_value'] / 10000) - 1) * 100
-            st.metric(
-                "收益率", 
-                f"{profit_pct:.4f}%",
-                f"{stats['roi']:.2%} (年化)"
-            )
-        
-        with col4:
-            st.metric(
-                "完成交易对", 
-                stats['pairs'],
-                f"{stats['total_trades']} 总交易"
-            )
-        
-        with col5:
-            st.metric(
-                "运行时间", 
-                f"{runtime/60:.1f} 分钟",
-                f"{stats['trades_per_hour']:.1f} 交易/小时"
-            )
-        
-        # 详细余额
-        st.header("💰 模拟账户余额")
-        balance_col1, balance_col2, balance_col3 = st.columns(3)
-        
-        with balance_col1:
-            st.metric("USDT余额", f"{stats['usdt_balance']:.2f}")
-        
-        with balance_col2:
-            base_asset = symbol.replace("USDT", "")
-            st.metric(f"{base_asset}余额", f"{stats['base_balance']:.6f}")
-        
-        with balance_col3:
-            st.metric("开放订单", stats['open'])
-        
-        # 当前挂单可视化
-        st.header("📋 当前挂单")
-        open_orders = engine.get_open_orders()
-        if open_orders:
-            # 转换为DataFrame显示
-            orders_data = []
-            for order_id, (idx, side) in open_orders.items():
-                try:
-                    # 检查网格索引是否在有效范围内
-                    if 0 <= idx <= engine.cfg.N:
-                        grid_price = float(engine.cfg.grid_price(idx))
-                        orders_data.append({
-                            "订单ID": order_id,
-                            "网格索引": idx,
-                            "方向": side,
-                            "价格": f"{grid_price:.6f}",
-                            "数量": f"{engine.cfg.qty:.6f}",
-                            "价值(USDT)": f"{grid_price * float(engine.cfg.qty):.2f}"
-                        })
-                    else:
-                        # 网格索引超出范围，显示错误信息
-                        orders_data.append({
-                            "订单ID": order_id,
-                            "网格索引": f"{idx} (越界!)",
-                            "方向": side,
-                            "价格": "错误",
-                            "数量": "错误",
-                            "价值(USDT)": "错误"
-                        })
-                        print(f"[ERROR] 订单 {order_id} 的网格索引 {idx} 超出范围 [0, {engine.cfg.N}]")
-                except Exception as e:
-                    print(f"[ERROR] 处理订单 {order_id} 时出错: {e}")
-                    orders_data.append({
-                        "订单ID": order_id,
-                        "网格索引": f"{idx} (错误)",
-                        "方向": side,
-                        "价格": "错误",
-                        "数量": "错误",
-                        "价值(USDT)": "错误"
-                    })
-            
-            if orders_data:
-                orders_df = pd.DataFrame(orders_data)
-                
-                # 高亮显示买单和卖单
-                def color_orders(row):
-                    if row['方向'] == 'BUY':
-                        return ['background-color: #90EE90'] * len(row)  # 浅绿色
-                    else:
-                        return ['background-color: #FFB6C1'] * len(row)  # 浅红色
-                
-                st.dataframe(
-                    orders_df.style.apply(color_orders, axis=1),
-                    use_container_width=True
-                )
-                
-                # 检查是否有越界订单
-                invalid_orders = [order for order in orders_data if "越界" in str(order["网格索引"]) or "错误" in str(order["网格索引"])]
-                if invalid_orders:
-                    st.error(f"⚠️ 发现 {len(invalid_orders)} 个无效订单，建议重置状态！")
-                    st.info("💡 点击'重置状态'按钮清理无效订单")
-                else:
-                    st.info(f"💡 当前有 {len(orders_data)} 个挂单等待成交（绿色=买单，粉色=卖单）")
-            else:
-                st.warning("⚠️ 当前没有有效挂单！")
-        else:
-            st.warning("⚠️ 当前没有挂单！这可能是以下原因：")
-            st.write("1. 模拟刚启动，订单正在设置中")
-            st.write("2. 价格超出网格范围")
-            st.write("3. 余额不足无法下单")
-            st.write("4. 订单检查逻辑需要调试")
-        
-        # 收益分析
-        st.header("📊 收益分析")
-        
-        analysis_col1, analysis_col2 = st.columns(2)
-        
-        with analysis_col1:
-            st.metric("已实现收益", f"{stats['pnl']:.4f} USDT")
-            st.metric("未实现收益", f"{stats['unreal']:.4f} USDT")
-        
-        with analysis_col2:
-            if stats['pairs'] > 0:
-                avg_profit = stats['pnl'] / stats['pairs']
-                st.metric("平均每对收益", f"{avg_profit:.4f} USDT")
-            else:
-                st.metric("平均每对收益", "0.0000 USDT")
-            
-            if stats['total_trades'] > 0:
-                avg_trade_value = stats['total_value'] / stats['total_trades']
-                st.metric("平均交易价值", f"{avg_trade_value:.2f} USDT")
-        
-        # 网格状态表格
-        st.header("🎯 网格状态")
-        
-        try:
-            current_price = stats['current_price']
-            current_idx = engine.cfg.price_to_grid_index(current_price)
-            
-            # 检查当前价格索引是否有效
-            if current_idx < 0 or current_idx >= engine.cfg.N:
-                st.error(f"⚠️ 当前价格 {current_price:.6f} 超出网格范围，无法显示网格状态")
-                st.info(f"当前网格范围: {engine.cfg.lo} - {engine.cfg.hi}")
-                st.info("建议调整网格价格范围以包含当前价格")
-            else:
-                # 构建网格表格数据
-                grid_data = []
-                for i in range(engine.cfg.N):
-                    try:
-                        buy_price = float(engine.cfg.grid_price(i))
-                        sell_price = float(engine.cfg.grid_price(i + 1))
-                        profit = float(engine.cfg.profit_per_grid(i))
-                        
-                        # 检查是否有订单在这个网格
-                        has_buy_order = any(idx == i and side == "BUY" for idx, side in open_orders.values() if 0 <= idx <= engine.cfg.N)
-                        has_sell_order = any(idx == i + 1 and side == "SELL" for idx, side in open_orders.values() if 0 <= idx <= engine.cfg.N)
-                        
-                        status = ""
-                        if has_buy_order:
-                            status += "🟢买单 "
-                        if has_sell_order:
-                            status += "🔴卖单 "
-                        if not status:
-                            status = "⚪空闲"
-                        
-                        grid_data.append({
-                            "网格": i,
-                            "买入价": f"{buy_price:.6f}",
-                            "卖出价": f"{sell_price:.6f}",
-                            "利润": f"{profit:.4f}",
-                            "状态": status,
-                            "当前位置": "🎯" if i == current_idx else ""
-                        })
-                    except Exception as e:
-                        print(f"[ERROR] 处理网格 {i} 时出错: {e}")
-                        continue
-                
-                if grid_data:
-                    grid_df = pd.DataFrame(grid_data)
-                    
-                    # 高亮当前价格所在网格
-                    def highlight_current_grid(s):
-                        current_grid = s.name == current_idx
-                        if current_grid:
-                            return ['background-color: yellow'] * len(s)
-                        else:
-                            return [''] * len(s)
-                    
-                    st.dataframe(
-                        grid_df.style.apply(highlight_current_grid, axis=1),
-                        use_container_width=True,
-                        height=400
-                    )
-                    
-                    st.info(f"💡 当前价格 {current_price:.6f} 位于网格 {current_idx}（黄色高亮）")
-                else:
-                    st.error("无法显示网格数据")
-            
-        except Exception as e:
-            st.error(f"网格状态显示错误: {e}")
-            st.info("建议重置状态以清理无效数据")
-            
-        # 最近交易记录
-        st.header("📈 最近交易记录")
-        try:
-            trade_history = engine.get_trade_history()
-            if trade_history:
-                recent_trades = trade_history[-10:]  # 显示最近10笔交易
-                trades_data = []
-                for trade in recent_trades:
-                    trades_data.append({
-                        "时间": time.strftime("%H:%M:%S", time.localtime(trade.get('timestamp', time.time()))),
-                        "方向": trade['side'],
-                        "价格": f"{float(trade['price']):.6f}",
-                        "数量": f"{float(trade['quantity']):.6f}",
-                        "网格": trade.get('grid_index', 'N/A')
-                    })
-                
-                trades_df = pd.DataFrame(trades_data)
-                st.dataframe(trades_df, use_container_width=True)
-            else:
-                st.info("还没有交易记录")
-        except Exception as e:
-            st.warning(f"无法显示交易记录: {e}")
-            
     except Exception as e:
         st.error(f"获取状态时出错: {e}")
         st.exception(e)
 
 else:
-    # 未运行时显示说明
-    st.header("📝 使用说明")
-    
-    st.markdown("""
-    ### 🎯 核心特点
-    - **真实价格数据**：使用您的MEXC API获取实时价格
-    - **模拟交易执行**：所有订单都是虚拟的，不会真正下单
-    - **1,000,000 USDT虚拟资金**：大额资金模拟环境
-    - **完整网格策略**：与真实交易使用相同的算法
-    
-    ### 🚀 快速开始
-    1. 在左侧配置网格参数
-    2. 确保价格区间合理覆盖当前价格
-    3. 点击"开始模拟"启动
-    4. 实时观察真实价格变化和模拟交易执行
-    
-    ### ⚙️ 参数建议
-    - **价格区间**：建议以当前价格为中心，上下各留20-30%空间
-    - **网格数量**：建议15-30个，平衡收益和交易频率
-    - **网格模式**：等比模式适合波动较大的币种
-    
-    ### 💡 优势对比
-    
-    | 特性 | 真实价格模拟 🎯 | 完全虚拟模拟 |
-    |------|----------------|-------------|
-    | 价格数据 | ✅ 真实价格 | 🔄 模拟价格 |
-    | 交易执行 | 🔄 模拟订单 | 🔄 模拟订单 |
-    | 网络需求 | ✅ 需要 | ❌ 不需要 |
-    | 真实性 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
-    | 学习价值 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-    
-    ### ⚠️ 重要提醒
-    - 这是模拟交易，不会产生真实的盈亏
-    - 所有订单都是虚拟的，不会影响您的实际账户
-    - 建议先在此模拟环境中验证策略效果
-    """)
-    
-    # 显示历史记录
-    import os
-    if os.path.exists("real_price_grid_state.json"):
-        st.info("💾 检测到历史模拟数据，开始新模拟将从上次状态恢复")
+    # 未运行时显示精简说明
+    with st.expander("ℹ️ 使用说明（点击展开）", expanded=False):
+        st.markdown("""
+        **核心特点**
+        * 真实价格 · 模拟成交 · 安全无风险
+        * 网格策略与实盘一致，可快速验证参数
+        
+        **快速开始**
+        1. 左侧输入区间 & 网格数
+        2. 查看K线+网格预览确认
+        3. 点击 **开始模拟**
+        
+        **提示**  
+        - 绿色提示代表参数合理  
+        - 红色提示表示需要调整
+        """)
+
+# ===========================================================
+# ⭐ UI 辅助函数（提前定义，保证调用时已存在）
+# ===========================================================
+
+# ------------------------------------------------------------
+# 以上函数定义完毕
+# ------------------------------------------------------------
 
 # 页脚
 st.markdown("---")

@@ -237,6 +237,12 @@ class GridConfig:
         }
         return pd.DataFrame(data)
 
+    def update_qty(self, new_qty):
+        """动态更新每单数量并重新计算每格利润"""
+        self.qty = Decimal(str(new_qty))
+        # 数量变化后需要重新计算每格利润
+        self.profits = self._calc_grid_profits()
+
 # -------------------- 快速自测 --------------------
 if __name__ == "__main__":
     cfg = GridConfig(

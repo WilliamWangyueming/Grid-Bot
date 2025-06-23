@@ -1,5 +1,5 @@
 """
-优化版多数据源获取器 - 只保留真正有效的数据源
+优化版多数据源获取器 - 智能数据源选择，避免重复数据
 获取DOGE等币种的15分钟交易数据，支持一年历史数据
 """
 import requests
@@ -15,236 +15,558 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class EnhancedMultiSourceDataFetcher:
-    """优化版多数据源获取器 - 只保留有效数据源"""
+    """优化版多数据源获取器 - 智能数据源选择"""
     
     def __init__(self, symbol="DOGEUSDT"):
         self.symbol = symbol
-        # 只保留真正有效的数据源
+        # 数据源按优先级排序：质量 + 数据量 + 稳定性
         self.data_sources = [
-            "yahoo_finance",       # ✅ 已验证：真实DOGE数据，1年历史
-            "kraken_ohlc",         # ✅ 稳定：官方API，良好数据
-            "huobi_api",           # ✅ 可靠：15分钟数据，高密度
+            "yahoo_finance",       # ✅ 最优：真实DOGE数据，1年历史，多时间颗粒度
+            "huobi_api",           # ✅ 高质量：15分钟数据，高密度，稳定
+            "kraken_ohlc",         # ✅ 稳定：官方API，但数据量较少
         ]
         
     def fetch_all_sources(self, target_points=2000):
-        """尝试所有有效数据源，获取最大数据量"""
+        """智能获取数据：优先选择最佳数据源，避免不必要的重复"""
         
-        print("🚀 启动优化版多数据源获取")
+        print("🚀 启动智能多数据源获取")
         print("=" * 60)
         print(f"🎯 交易对: {self.symbol}")
         print(f"📊 目标数据量: {target_points} 条")
-        print(f"🔄 有效数据源: {len(self.data_sources)} 个")
+        print(f"🧠 智能策略: 优先级选择 + 质量评估")
         
-        all_data = []
-        successful_sources = []
+        best_source = None
+        best_data = None
+        all_sources_data = []
         
-        # 1. 尝试 Yahoo Finance (混合策略)
-        print(f"\n📊 1. Yahoo Finance (混合策略)")
+        # 1. Yahoo Finance - 最高优先级（混合策略）
+        print(f"\n📊 1. Yahoo Finance (智能混合策略)")
         print("-" * 50)
         try:
-            data = self._fetch_yahoo_finance()
+            data = self._fetch_yahoo_finance_smart()
             if data is not None and len(data) > 100:
                 time_span = (data.index[-1] - data.index[0]).total_seconds() / 86400
-                print(f"✅ 成功: {len(data)}条数据, {time_span:.1f}天跨度")
-                all_data.append(("yahoo_finance", data))
-                successful_sources.append("Yahoo Finance")
-            else:
-                print(f"❌ 失败: 数据不足或无数据")
+                data_density = len(data) / time_span
+                
+                print(f"✅ Yahoo Finance 成功")
+                print(f"   📈 数据量: {len(data)}条")
+                print(f"   ⏰ 时间跨度: {time_span:.1f}天")
+                print(f"   📊 数据密度: {data_density:.1f} 条/天")
+                
+                # 评估Yahoo数据质量
+                quality_score = self._evaluate_data_quality(data, time_span)
+                print(f"   🏆 质量评分: {quality_score:.1f}/10")
+                
+                all_sources_data.append(("yahoo_finance", data, quality_score))
+                
+                # 如果Yahoo数据已经很好，可能不需要其他数据源
+                if len(data) >= target_points and time_span >= 30:  # 至少1个月数据
+                    print(f"   🎯 Yahoo数据已满足需求，跳过其他数据源")
+                    best_source = "yahoo_finance"
+                    best_data = data
+                    return self._finalize_result(best_source, best_data)
+                    
         except Exception as e:
-            print(f"❌ 错误: {str(e)}")
-            
-        # 2. 尝试 Kraken OHLC (稳定API)
-        print(f"\n📊 2. Kraken OHLC API (稳定数据源)")
-        print("-" * 50)
-        try:
-            data = self._fetch_kraken_ohlc()
-            if data is not None and len(data) > 100:
-                time_span = (data.index[-1] - data.index[0]).total_seconds() / 86400
-                print(f"✅ 成功: {len(data)}条数据, {time_span:.1f}天跨度")
-                all_data.append(("kraken_ohlc", data))
-                successful_sources.append("Kraken OHLC")
-            else:
-                print(f"❌ 失败: 数据不足或无数据")
-        except Exception as e:
-            print(f"❌ 错误: {str(e)}")
-            
-        # 3. 尝试 Huobi API (高密度15分钟数据)
-        print(f"\n📊 3. Huobi API (高密度15分钟数据)")
+            print(f"❌ Yahoo Finance 错误: {str(e)}")
+        
+        # 2. Huobi API - 如果Yahoo不够好才使用
+        print(f"\n📊 2. Huobi API (15分钟高密度数据)")
         print("-" * 50)
         try:
             data = self._fetch_huobi_15min()
             if data is not None and len(data) > 100:
                 time_span = (data.index[-1] - data.index[0]).total_seconds() / 86400
-                print(f"✅ 成功: {len(data)}条数据, {time_span:.1f}天跨度")
-                all_data.append(("huobi_api", data))
-                successful_sources.append("Huobi API")
-            else:
-                print(f"❌ 失败: 数据不足或无数据")
+                data_density = len(data) / time_span
+                
+                print(f"✅ Huobi API 成功")
+                print(f"   📈 数据量: {len(data)}条")
+                print(f"   ⏰ 时间跨度: {time_span:.1f}天")
+                print(f"   📊 数据密度: {data_density:.1f} 条/天")
+                
+                quality_score = self._evaluate_data_quality(data, time_span)
+                print(f"   🏆 质量评分: {quality_score:.1f}/10")
+                
+                all_sources_data.append(("huobi_api", data, quality_score))
+                
         except Exception as e:
-            print(f"❌ 错误: {str(e)}")
-            
-        # 合并所有成功的数据源
-        if all_data:
-            print(f"\n🎉 数据获取总结")
+            print(f"❌ Huobi API 错误: {str(e)}")
+        
+        # 3. Kraken OHLC - 作为补充
+        print(f"\n📊 3. Kraken OHLC API (稳定补充数据)")
+        print("-" * 50)
+        try:
+            data = self._fetch_kraken_ohlc()
+            if data is not None and len(data) > 100:
+                time_span = (data.index[-1] - data.index[0]).total_seconds() / 86400
+                data_density = len(data) / time_span
+                
+                print(f"✅ Kraken OHLC 成功")
+                print(f"   📈 数据量: {len(data)}条")
+                print(f"   ⏰ 时间跨度: {time_span:.1f}天")
+                print(f"   📊 数据密度: {data_density:.1f} 条/天")
+                
+                quality_score = self._evaluate_data_quality(data, time_span)
+                print(f"   🏆 质量评分: {quality_score:.1f}/10")
+                
+                all_sources_data.append(("kraken_ohlc", data, quality_score))
+                
+        except Exception as e:
+            print(f"❌ Kraken OHLC 错误: {str(e)}")
+        
+        # 智能选择最佳数据源
+        if all_sources_data:
+            print(f"\n🧠 智能数据源选择")
             print("=" * 60)
-            print(f"✅ 成功数据源: {len(successful_sources)} 个")
-            print(f"📋 成功列表: {', '.join(successful_sources)}")
             
-            # 选择数据量最大的源
-            best_source, best_data = max(all_data, key=lambda x: len(x[1]))
+            # 按质量评分排序
+            all_sources_data.sort(key=lambda x: x[2], reverse=True)
             
-            print(f"\n🏆 最佳数据源: {best_source}")
-            print(f"📊 最佳数据量: {len(best_data)} 条")
+            for i, (source_name, data, score) in enumerate(all_sources_data, 1):
+                time_span = (data.index[-1] - data.index[0]).total_seconds() / 86400
+                print(f"{i}. {source_name}: {len(data)}条, {time_span:.1f}天, 评分{score:.1f}")
             
-            # 尝试合并数据（修复时区问题）
-            if len(all_data) > 1:
-                print(f"\n🔄 尝试合并多个数据源...")
-                combined_data = self._merge_multiple_sources_fixed(all_data)
-                if combined_data is not None and len(combined_data) > len(best_data):
-                    print(f"✅ 数据合并成功: {len(combined_data)} 条 (增加了 {len(combined_data)-len(best_data)} 条)")
-                    best_source = "merged_sources"
-                    best_data = combined_data
+            # 选择最佳数据源
+            best_source, best_data, best_score = all_sources_data[0]
+            
+            print(f"\n🏆 选择最佳数据源: {best_source}")
+            print(f"📊 最终数据: {len(best_data)}条, 评分{best_score:.1f}")
+            
+            # 智能合并策略：只有在有明显补充价值时才合并
+            if len(all_sources_data) > 1:
+                best_time_span = (best_data.index[-1] - best_data.index[0]).total_seconds() / 86400
+                
+                # 检查是否需要合并其他数据源
+                should_merge = False
+                for source_name, data, score in all_sources_data[1:]:
+                    time_span = (data.index[-1] - data.index[0]).total_seconds() / 86400
+                    
+                    # 只有在能显著增加时间跨度或数据量时才合并
+                    if (time_span > best_time_span * 1.2 or  # 时间跨度增加20%以上
+                        len(data) > len(best_data) * 0.5):   # 数据量是最佳源的50%以上
+                        should_merge = True
+                        break
+                
+                if should_merge:
+                    print(f"\n🔄 执行智能数据合并...")
+                    combined_data = self._smart_merge_sources(all_sources_data)
+                    if combined_data is not None and len(combined_data) > len(best_data) * 1.1:
+                        improvement = len(combined_data) - len(best_data)
+                        print(f"✅ 合并成功: +{improvement}条数据")
+                        best_source = "merged_smart"
+                        best_data = combined_data
+                    else:
+                        print(f"⚠️ 合并收益不明显，保持单一数据源")
                 else:
-                    print(f"⚠️ 数据合并后无明显增加，使用单一最佳数据源")
+                    print(f"⚠️ 其他数据源无显著补充价值，保持最佳单一数据源")
             
-            time_span_days = (best_data.index[-1] - best_data.index[0]).total_seconds()/86400
-            time_span_years = time_span_days / 365
-            
-            print(f"⏰ 时间跨度: {time_span_days:.1f}天 ({time_span_years:.2f}年)")
-            print(f"📅 时间范围: {best_data.index[0]} 到 {best_data.index[-1]}")
-            print(f"💰 价格范围: {best_data['close'].min():.6f} - {best_data['close'].max():.6f}")
-            
-            return best_source, best_data
+            # 统一将Yahoo最佳数据重采样至严格15分钟时间轴，避免后续重复填充
+            best_data = self._resample_to_15m(best_data)
+            return self._finalize_result(best_source, best_data)
+        
         else:
             print("❌ 所有数据源都失败了")
             return None, None
     
-    def _fetch_yahoo_finance(self):
-        """获取 Yahoo Finance 的DOGE数据（混合策略：15分钟+1小时）"""
+    def _evaluate_data_quality(self, data, time_span_days):
+        """评估数据质量 (0-10分)"""
         try:
-            print("   🔄 尝试 Yahoo Finance (混合策略)...")
+            score = 0.0
             
-            # 使用已验证的DOGE符号
+            # 1. 数据量评分 (0-3分)
+            if len(data) >= 4000:
+                score += 3.0
+            elif len(data) >= 2000:
+                score += 2.5
+            elif len(data) >= 1000:
+                score += 2.0
+            elif len(data) >= 500:
+                score += 1.5
+            else:
+                score += len(data) / 500.0
+            
+            # 2. 时间跨度评分 (0-3分)
+            if time_span_days >= 300:  # 接近1年
+                score += 3.0
+            elif time_span_days >= 180:  # 半年
+                score += 2.5
+            elif time_span_days >= 90:   # 3个月
+                score += 2.0
+            elif time_span_days >= 30:   # 1个月
+                score += 1.5
+            else:
+                score += time_span_days / 30.0
+            
+            # 3. 数据密度评分 (0-2分)
+            density = len(data) / time_span_days
+            if density >= 96:    # 15分钟级别 (96条/天)
+                score += 2.0
+            elif density >= 24:  # 小时级别 (24条/天)
+                score += 1.5
+            elif density >= 4:   # 6小时级别
+                score += 1.0
+            else:
+                score += density / 24.0
+            
+            # 4. 数据完整性评分 (0-2分)
+            # 检查是否有缺失值
+            missing_ratio = data.isnull().sum().sum() / (len(data) * len(data.columns))
+            if missing_ratio == 0:
+                score += 2.0
+            elif missing_ratio < 0.01:
+                score += 1.5
+            elif missing_ratio < 0.05:
+                score += 1.0
+            else:
+                score += max(0, 1.0 - missing_ratio)
+            
+            return min(10.0, score)
+            
+        except:
+            return 5.0  # 默认中等评分
+    
+    def _smart_merge_sources(self, all_sources_data):
+        """
+        智能合并多数据源，统一重采样到15分钟时间轴
+        """
+        try:
+            print("🔄 开始智能数据源合并...")
+            
+            all_data = []
+            
+            # 预处理每个数据源
+            for source_name, data, score in all_sources_data:
+                # 确保数据有时间索引
+                if not isinstance(data.index, pd.DatetimeIndex):
+                    data.index = pd.to_datetime(data.index)
+                
+                # 删除重复时间戳，保留最后一个
+                data_clean = data[~data.index.duplicated(keep='last')]
+                
+                # 统一重采样到15分钟
+                try:
+                    resampled = data_clean.resample('15T').agg({
+                        'open': 'first',
+                        'high': 'max',
+                        'low': 'min', 
+                        'close': 'last',
+                        'volume': 'sum'
+                    })
+                    
+                    # 前向填充缺失值
+                    resampled = resampled.fillna(method='ffill')
+                    
+                    # 删除NaN行
+                    resampled = resampled.dropna()
+                    
+                    if len(resampled) > 50:  # 确保有足够数据
+                        all_data.append((source_name, resampled, score))
+                        print(f"   ✅ {source_name}: 重采样到 {len(resampled)} 条15分钟数据")
+                    else:
+                        print(f"   ⚠️ {source_name}: 重采样后数据不足，跳过")
+                        
+                except Exception as e:
+                    print(f"   ❌ {source_name}: 重采样失败 - {str(e)}")
+                    continue
+            
+            if len(all_data) < 2:
+                print("   ⚠️ 可用数据源不足，无法合并")
+                return None
+            
+            # 找到时间范围的交集和并集
+            earliest_start = min([data.index[0] for _, data, _ in all_data])
+            latest_end = max([data.index[-1] for _, data, _ in all_data])
+            
+            print(f"   📅 合并时间范围: {earliest_start} 到 {latest_end}")
+            
+            # 创建统一的15分钟时间轴
+            unified_timeline = pd.date_range(
+                start=earliest_start, 
+                end=latest_end, 
+                freq='15T'
+            )
+            
+            # 基于质量评分排序，优先使用高质量数据
+            all_data.sort(key=lambda x: x[2], reverse=True)
+            
+            # 从最高质量数据源开始
+            primary_source, primary_data, primary_score = all_data[0]
+            print(f"   🏆 主要数据源: {primary_source} (评分: {primary_score:.1f})")
+            
+            # 重建索引到统一时间轴
+            merged_data = primary_data.reindex(unified_timeline, method='nearest', tolerance='30T')
+            
+            # 用其他数据源填补缺失
+            for source_name, data, score in all_data[1:]:
+                print(f"   🔗 合并 {source_name} (评分: {score:.1f})")
+                
+                # 找到缺失的时间点
+                missing_mask = merged_data.isnull().any(axis=1)
+                missing_times = merged_data[missing_mask].index
+                
+                if len(missing_times) > 0:
+                    # 用当前数据源填补
+                    fill_data = data.reindex(missing_times, method='nearest', tolerance='30T')
+                    
+                    # 只填补有效数据
+                    valid_fill = fill_data.dropna()
+                    if len(valid_fill) > 0:
+                        merged_data.loc[valid_fill.index] = valid_fill
+                        filled_count = len(valid_fill)
+                        print(f"     ↪️ 填补了 {filled_count} 个缺失时间点")
+                    else:
+                        print(f"     ⚠️ 无有效数据可填补")
+                else:
+                    print(f"     ✅ 无需填补")
+            
+            # 最终清理
+            merged_data = merged_data.dropna()
+            
+            # 数据质量检查
+            if len(merged_data) > 0:
+                # 确保价格逻辑性
+                merged_data['high'] = merged_data[['open', 'high', 'close']].max(axis=1)
+                merged_data['low'] = merged_data[['open', 'low', 'close']].min(axis=1)
+                merged_data['volume'] = merged_data['volume'].clip(lower=0)  # 成交量非负
+                
+                time_span = (merged_data.index[-1] - merged_data.index[0]).total_seconds() / 86400
+                data_density = len(merged_data) / time_span if time_span > 0 else 0
+                
+                print(f"   ✅ 合并完成:")
+                print(f"     📊 最终数据量: {len(merged_data)} 条")
+                print(f"     ⏰ 时间跨度: {time_span:.1f} 天")
+                print(f"     📈 数据密度: {data_density:.1f} 条/天")
+                
+                return merged_data
+            else:
+                print("   ❌ 合并后无有效数据")
+                return None
+                
+        except Exception as e:
+            print(f"❌ 智能合并失败: {str(e)}")
+            return None
+    
+    def _finalize_result(self, source, data):
+        """最终结果处理和展示"""
+        if data is None:
+            return None, None
+        
+        time_span_days = (data.index[-1] - data.index[0]).total_seconds()/86400
+        time_span_years = time_span_days / 365
+        
+        print(f"\n🎉 数据获取完成")
+        print("=" * 60)
+        print(f"🏆 最终数据源: {source}")
+        print(f"📈 数据量: {len(data):,} 条")
+        print(f"⏰ 时间跨度: {time_span_days:.1f}天 ({time_span_years:.2f}年)")
+        print(f"📅 时间范围: {data.index[0]} 到 {data.index[-1]}")
+        print(f"💰 价格范围: {data['close'].min():.6f} - {data['close'].max():.6f}")
+        print(f"📊 数据密度: {len(data)/time_span_days:.1f} 条/天")
+        
+        # 数据质量评估
+        quality_score = self._evaluate_data_quality(data, time_span_days)
+        if quality_score >= 8.5:
+            print(f"🏆 数据质量: 卓越 ({quality_score:.1f}/10)")
+        elif quality_score >= 7.0:
+            print(f"🥇 数据质量: 优秀 ({quality_score:.1f}/10)")
+        elif quality_score >= 5.5:
+            print(f"👍 数据质量: 良好 ({quality_score:.1f}/10)")
+        else:
+            print(f"⚠️ 数据质量: 一般 ({quality_score:.1f}/10)")
+        
+        return source, data
+    
+    def _fetch_yahoo_finance_smart(self):
+        """智能获取 Yahoo Finance 数据 - 优先15分钟，1小时补充历史"""
+        try:
+            print("   🧠 智能 Yahoo Finance 策略...")
+            
             symbol = "DOGE-USD"
             ticker = yf.Ticker(symbol)
-            
             print(f"   📥 获取符号: {symbol}")
             
-            # 策略1: 获取近期60天的15分钟高精度数据
-            print("   📊 策略1: 获取近期60天15分钟数据...")
-            try:
-                data_15m = ticker.history(period="60d", interval="15m", auto_adjust=False, prepost=False)
-                if len(data_15m) > 100:
-                    days_15m = (data_15m.index[-1] - data_15m.index[0]).total_seconds() / 86400
-                    print(f"   ✅ 15分钟数据: {len(data_15m)}条, {days_15m:.1f}天")
+            # 策略选择：根据需求智能选择最佳策略
+            strategies = []
+            
+            # 策略1: 最大范围15分钟数据（优先策略）
+            print("   📊 策略1: 最大范围15分钟数据...")
+            df_15m_max = None
+            for period in ["60d", "30d", "7d"]:  # 尝试不同时间范围
+                try:
+                    print(f"      🔍 尝试15分钟数据 ({period})...")
+                    data_15m = ticker.history(period=period, interval="15m", auto_adjust=False, prepost=False)
+                    if len(data_15m) > 100:
+                        df_15m_temp = self._convert_yahoo_data(data_15m)
+                        time_span = (df_15m_temp.index[-1] - df_15m_temp.index[0]).total_seconds() / 86400
+                        print(f"         ✅ 15分钟数据 ({period}): {len(df_15m_temp)}条, {time_span:.1f}天")
+                        
+                        # 选择数据最多的15分钟数据集
+                        if df_15m_max is None or len(df_15m_temp) > len(df_15m_max):
+                            df_15m_max = df_15m_temp
+                            
+                except Exception as e:
+                    print(f"         ❌ 15分钟数据 ({period}) 失败: {str(e)}")
+            
+            if df_15m_max is not None:
+                time_span_15m = (df_15m_max.index[-1] - df_15m_max.index[0]).total_seconds() / 86400
+                strategies.append(("15min_max", df_15m_max, len(df_15m_max), time_span_15m))
+                print(f"      🏆 最佳15分钟数据: {len(df_15m_max)}条, {time_span_15m:.1f}天")
+            
+            # 策略2: 1年1小时数据（补充历史用）
+            print("   📊 策略2: 1年1小时历史数据...")
+            df_1h = None
+            for period in ["1y", "max"]:  # 尝试获取最长历史
+                try:
+                    print(f"      🔍 尝试1小时数据 ({period})...")
+                    data_1h = ticker.history(period=period, interval="1h", auto_adjust=False, prepost=False)
+                    if len(data_1h) > 100:
+                        df_1h_temp = self._convert_yahoo_data(data_1h)
+                        time_span = (df_1h_temp.index[-1] - df_1h_temp.index[0]).total_seconds() / 86400
+                        print(f"         ✅ 1小时数据 ({period}): {len(df_1h_temp)}条, {time_span:.1f}天")
+                        
+                        # 选择时间跨度最长的1小时数据
+                        if df_1h is None or time_span > (df_1h.index[-1] - df_1h.index[0]).total_seconds() / 86400:
+                            df_1h = df_1h_temp
+                            
+                except Exception as e:
+                    print(f"         ❌ 1小时数据 ({period}) 失败: {str(e)}")
+            
+            if df_1h is not None:
+                time_span_1h = (df_1h.index[-1] - df_1h.index[0]).total_seconds() / 86400
+                strategies.append(("1hour_max", df_1h, len(df_1h), time_span_1h))
+                print(f"      🏆 最佳1小时数据: {len(df_1h)}条, {time_span_1h:.1f}天")
+            
+            # 策略3: 智能融合 - 15分钟优先 + 1小时补充历史
+            if df_15m_max is not None and df_1h is not None:
+                print("   📊 策略3: 智能融合 (15分钟优先 + 1小时补充)...")
+                try:
+                    # 分析15分钟数据的时间范围
+                    min_15m = df_15m_max.index.min()
+                    max_15m = df_15m_max.index.max()
                     
-                    # 转换格式
-                    df_15m = pd.DataFrame()
-                    df_15m['open'] = data_15m['Open']
-                    df_15m['high'] = data_15m['High'] 
-                    df_15m['low'] = data_15m['Low']
-                    df_15m['close'] = data_15m['Close']
-                    df_15m['volume'] = data_15m['Volume']
+                    print(f"      📅 15分钟数据范围: {min_15m} 到 {max_15m}")
                     
-                    # 统一时区处理
-                    if data_15m.index.tz is not None:
-                        df_15m.index = data_15m.index.tz_convert('UTC').tz_localize(None)
-                    else:
-                        df_15m.index = pd.to_datetime(data_15m.index)
+                    # 从1小时数据中提取15分钟数据范围之外的历史数据
+                    df_1h_historical = df_1h[df_1h.index < min_15m]
+                    df_1h_future = df_1h[df_1h.index > max_15m]  # 也可能有未来数据
                     
-                    # 策略2: 获取1年的1小时数据作为补充
-                    print("   📊 策略2: 获取1年1小时数据作为历史补充...")
-                    try:
-                        data_1h = ticker.history(period="1y", interval="1h", auto_adjust=False, prepost=False)
-                        if len(data_1h) > 100:
-                            days_1h = (data_1h.index[-1] - data_1h.index[0]).total_seconds() / 86400
-                            print(f"   ✅ 1小时数据: {len(data_1h)}条, {days_1h:.1f}天")
-                            
-                            # 转换格式
-                            df_1h = pd.DataFrame()
-                            df_1h['open'] = data_1h['Open']
-                            df_1h['high'] = data_1h['High'] 
-                            df_1h['low'] = data_1h['Low']
-                            df_1h['close'] = data_1h['Close']
-                            df_1h['volume'] = data_1h['Volume']
-                            
-                            # 统一时区处理
-                            if data_1h.index.tz is not None:
-                                df_1h.index = data_1h.index.tz_convert('UTC').tz_localize(None)
-                            else:
-                                df_1h.index = pd.to_datetime(data_1h.index)
-                            
-                            # 策略3: 智能合并数据
-                            print("   🔄 智能合并高精度和长期数据...")
-                            
-                            # 找到15分钟数据的开始时间
-                            cutoff_time = df_15m.index[0]
-                            
-                            # 只保留15分钟数据开始时间之前的1小时数据
-                            df_1h_historical = df_1h[df_1h.index < cutoff_time]
-                            
-                            if len(df_1h_historical) > 0:
-                                # 合并数据：历史1小时数据 + 近期15分钟数据
-                                combined_df = pd.concat([df_1h_historical, df_15m]).sort_index()
-                                combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
-                                
-                                total_days = (combined_df.index[-1] - combined_df.index[0]).total_seconds() / 86400
-                                historical_days = (df_1h_historical.index[-1] - df_1h_historical.index[0]).total_seconds() / 86400
-                                
-                                print(f"   🎉 混合数据合并成功!")
-                                print(f"      📈 总数据量: {len(combined_df)}条")
-                                print(f"      ⏰ 总时间跨度: {total_days:.1f}天 ({total_days/365:.2f}年)")
-                                print(f"      📊 历史部分: {len(df_1h_historical)}条1小时数据 ({historical_days:.1f}天)")
-                                print(f"      🔍 近期部分: {len(df_15m)}条15分钟数据 ({days_15m:.1f}天)")
-                                
-                                return combined_df
-                            else:
-                                print("   ⚠️ 无历史数据可合并，返回15分钟数据")
-                                return df_15m
+                    print(f"      📊 1小时历史数据: {len(df_1h_historical)}条")
+                    print(f"      📊 1小时未来数据: {len(df_1h_future)}条")
+                    
+                    # 智能融合策略
+                    fusion_parts = []
+                    
+                    # 1. 添加1小时历史数据（15分钟数据之前的时间段）
+                    if len(df_1h_historical) > 0:
+                        fusion_parts.append(df_1h_historical)
+                        print(f"      ✅ 添加历史1小时数据: {len(df_1h_historical)}条")
+                    
+                    # 2. 添加15分钟高精度数据（主要数据）
+                    fusion_parts.append(df_15m_max)
+                    print(f"      ✅ 添加15分钟高精度数据: {len(df_15m_max)}条")
+                    
+                    # 3. 添加1小时未来数据（如果有的话）
+                    if len(df_1h_future) > 0:
+                        fusion_parts.append(df_1h_future)
+                        print(f"      ✅ 添加未来1小时数据: {len(df_1h_future)}条")
+                    
+                    # 合并所有数据
+                    if len(fusion_parts) > 1:
+                        combined_df = pd.concat(fusion_parts).sort_index()
+                        # 去除重复时间戳（优先保留15分钟数据）
+                        combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
+                        
+                        time_span_combined = (combined_df.index[-1] - combined_df.index[0]).total_seconds() / 86400
+                        
+                        # 计算数据构成
+                        historical_days = 0
+                        if len(df_1h_historical) > 0:
+                            historical_days = (df_1h_historical.index[-1] - df_1h_historical.index[0]).total_seconds() / 86400
+                        
+                        main_days = (df_15m_max.index[-1] - df_15m_max.index[0]).total_seconds() / 86400
+                        
+                        strategies.append(("fusion_optimal", combined_df, len(combined_df), time_span_combined))
+                        
+                        print(f"      🎉 融合数据创建成功!")
+                        print(f"         📈 总数据量: {len(combined_df)}条")
+                        print(f"         ⏰ 总时间跨度: {time_span_combined:.1f}天 ({time_span_combined/365:.2f}年)")
+                        print(f"         📊 历史1小时段: {len(df_1h_historical)}条 ({historical_days:.1f}天)")
+                        print(f"         🔍 高精度15分钟段: {len(df_15m_max)}条 ({main_days:.1f}天)")
+                        if len(df_1h_future) > 0:
+                            future_days = (df_1h_future.index[-1] - df_1h_future.index[0]).total_seconds() / 86400
+                            print(f"         📈 未来1小时段: {len(df_1h_future)}条 ({future_days:.1f}天)")
+                        
+                        # 检查是否达到1年目标
+                        if time_span_combined >= 300:  # 约10个月
+                            print(f"         🎯 已达到长期历史目标 ({time_span_combined/365:.2f}年)")
                         else:
-                            print("   ⚠️ 1小时数据获取失败，返回15分钟数据")
-                            return df_15m
-                    except Exception as e:
-                        print(f"   ⚠️ 1小时数据获取失败: {str(e)}，返回15分钟数据")
-                        return df_15m
-                else:
-                    print("   ❌ 15分钟数据获取失败")
-            except Exception as e:
-                print(f"   ❌ 15分钟数据获取失败: {str(e)}")
+                            print(f"         ⚠️ 时间跨度未达到1年目标，但已最大化利用可用数据")
+                    
+                except Exception as e:
+                    print(f"      ❌ 融合策略失败: {str(e)}")
             
-            # 备用策略: 如果15分钟数据失败，尝试获取1小时数据
-            print("   📊 备用策略: 尝试1小时数据...")
-            try:
-                data_1h = ticker.history(period="1y", interval="1h", auto_adjust=False, prepost=False)
-                if len(data_1h) > 100:
-                    days = (data_1h.index[-1] - data_1h.index[0]).total_seconds() / 86400
-                    print(f"   ✅ 备用1小时数据: {len(data_1h)}条, {days:.1f}天")
+            # 策略4: 如果只有15分钟数据
+            elif df_15m_max is not None:
+                print("   📊 策略4: 仅15分钟数据 (无1小时补充)...")
+                strategies.append(("15min_only", df_15m_max, len(df_15m_max), time_span_15m))
+                print(f"      ⚠️ 仅有15分钟数据，无法获取1小时历史补充")
+            
+            # 策略5: 如果只有1小时数据  
+            elif df_1h is not None:
+                print("   📊 策略5: 仅1小时数据 (无15分钟数据)...")
+                strategies.append(("1hour_only", df_1h, len(df_1h), time_span_1h))
+                print(f"      ⚠️ 仅有1小时数据，无法获取15分钟高精度数据")
+            
+            # 选择最佳策略 - 优先融合策略
+            if strategies:
+                print("   🧠 评估策略优劣...")
+                
+                # 计算每个策略的综合评分，融合策略额外加分
+                scored_strategies = []
+                for strategy_name, df, count, time_span in strategies:
+                    base_score = self._evaluate_data_quality(df, time_span)
                     
-                    # 转换格式
-                    df = pd.DataFrame()
-                    df['open'] = data_1h['Open']
-                    df['high'] = data_1h['High'] 
-                    df['low'] = data_1h['Low']
-                    df['close'] = data_1h['Close']
-                    df['volume'] = data_1h['Volume']
-                    
-                    # 统一时区处理
-                    if data_1h.index.tz is not None:
-                        df.index = data_1h.index.tz_convert('UTC').tz_localize(None)
+                    # 融合策略额外奖励
+                    if "fusion" in strategy_name:
+                        bonus_score = 1.0  # 融合策略额外1分
+                        print(f"      {strategy_name}: {count}条, {time_span:.1f}天, 评分{base_score:.1f}+{bonus_score:.1f}(融合奖励)={base_score+bonus_score:.1f}")
+                        scored_strategies.append((strategy_name, df, base_score + bonus_score))
                     else:
-                        df.index = pd.to_datetime(data_1h.index)
-                    
-                    return df
-            except Exception as e:
-                print(f"   ❌ 备用1小时数据失败: {str(e)}")
+                        scored_strategies.append((strategy_name, df, base_score))
+                        print(f"      {strategy_name}: {count}条, {time_span:.1f}天, 评分{base_score:.1f}")
+                
+                # 选择最高评分的策略
+                best_strategy = max(scored_strategies, key=lambda x: x[2])
+                strategy_name, best_df, best_score = best_strategy
+                
+                print(f"   🏆 选择策略: {strategy_name} (评分: {best_score:.1f})")
+                # 统一将Yahoo最佳数据重采样至严格15分钟时间轴，避免后续重复填充
+                best_df = self._resample_to_15m(best_df)
+                return best_df
             
-            print(f"   ❌ Yahoo Finance 所有策略都失败")
+            print("   ❌ 所有Yahoo策略都失败了")
             return None
             
         except Exception as e:
-            print(f"   ❌ Yahoo Finance 整体失败: {str(e)}")
+            print(f"   ❌ Yahoo Finance 智能策略失败: {str(e)}")
             return None
     
+    def _convert_yahoo_data(self, data):
+        """转换Yahoo Finance数据格式"""
+        df = pd.DataFrame()
+        df['open'] = data['Open']
+        df['high'] = data['High'] 
+        df['low'] = data['Low']
+        df['close'] = data['Close']
+        df['volume'] = data['Volume']
+        
+        # 统一时区处理
+        if data.index.tz is not None:
+            df.index = data.index.tz_convert('UTC').tz_localize(None)
+        else:
+            df.index = pd.to_datetime(data.index)
+        
+        return df.sort_index()
+
     def _fetch_kraken_ohlc(self):
         """获取 Kraken OHLC 数据"""
         try:
@@ -386,54 +708,47 @@ class EnhancedMultiSourceDataFetcher:
         df.set_index('timestamp', inplace=True)
         
         return df[['open', 'high', 'low', 'close', 'volume']].sort_index()
-    
-    def _merge_multiple_sources_fixed(self, all_data):
-        """合并多个数据源的数据（修复时区问题）"""
+
+    def _resample_to_15m(self, data):
+        """将数据重采样到严格15分钟时间轴"""
         try:
-            print("   🔄 合并数据源...")
+            print("🔄 开始重采样到15分钟时间轴...")
             
-            # 按数据量排序，最大的在前
-            sorted_data = sorted(all_data, key=lambda x: len(x[1]), reverse=True)
+            # 确保数据有时间索引
+            if not isinstance(data.index, pd.DatetimeIndex):
+                data.index = pd.to_datetime(data.index)
             
-            # 从最大的数据源开始
-            combined_df = sorted_data[0][1].copy()
-            base_source = sorted_data[0][0]
+            # 删除重复时间戳，保留最后一个
+            data_clean = data[~data.index.duplicated(keep='last')]
             
-            # 确保基础数据没有时区信息
-            if combined_df.index.tz is not None:
-                combined_df.index = combined_df.index.tz_localize(None)
-            
-            print(f"   📊 基础数据源: {base_source} ({len(combined_df)}条)")
-            
-            # 合并其他数据源
-            for source_name, df in sorted_data[1:]:
-                print(f"   🔄 合并 {source_name} ({len(df)}条)...")
+            # 统一重采样到15分钟
+            try:
+                resampled = data_clean.resample('15T').agg({
+                    'open': 'first',
+                    'high': 'max',
+                    'low': 'min', 
+                    'close': 'last',
+                    'volume': 'sum'
+                })
                 
-                # 确保要合并的数据也没有时区信息
-                df_to_merge = df.copy()
-                if df_to_merge.index.tz is not None:
-                    df_to_merge.index = df_to_merge.index.tz_localize(None)
+                # 前向填充缺失值
+                resampled = resampled.fillna(method='ffill')
                 
-                # 去重合并：只添加时间戳不重复的数据
-                before_merge = len(combined_df)
+                # 删除NaN行
+                resampled = resampled.dropna()
                 
-                # 找到不重复的时间戳
-                new_timestamps = df_to_merge.index.difference(combined_df.index)
-                
-                if len(new_timestamps) > 0:
-                    new_data = df_to_merge.loc[new_timestamps]
-                    combined_df = pd.concat([combined_df, new_data]).sort_index()
-                    
-                    print(f"   ✅ 添加了 {len(new_data)} 条新数据")
+                if len(resampled) > 50:  # 确保有足够数据
+                    print(f"   ✅ 重采样到15分钟时间轴成功: {len(resampled)} 条15分钟数据")
+                    return resampled
                 else:
-                    print(f"   ⚠️ 无新数据可添加")
-            
-            print(f"   🎉 合并完成: 总计 {len(combined_df)} 条数据")
-            
-            return combined_df
+                    print(f"   ⚠️ 重采样后数据不足，跳过")
+                    
+            except Exception as e:
+                print(f"   ❌ 重采样失败 - {str(e)}")
+                return None
             
         except Exception as e:
-            print(f"   ❌ 数据合并失败: {str(e)}")
+            print(f"❌ 重采样失败: {str(e)}")
             return None
 
 def test_enhanced_fetcher():

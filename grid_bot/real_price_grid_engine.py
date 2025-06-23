@@ -4,7 +4,7 @@ real_price_grid_engine.py - 使用真实价格进行模拟交易的网格引擎
 修复版本：修正网格交易逻辑错误
 """
 import json, os, time, threading
-from decimal import Decimal
+from decimal import Decimal, ROUND_UP
 from real_price_simulation import RealPriceSimulationWrapper, RealPriceSimulationWebSocket
 from grid_config import GridConfig
 
@@ -50,10 +50,13 @@ class RealPriceGridEngine:
         # 根据投资金额和网格数量计算每格的USDT投入
         grid_n = self.cfg.N
         usdt_per_grid = max(self.invest_usdt / grid_n, Decimal("100"))
-        # 重新计算每格的数量（基于当前价格）
-        self.cfg.qty = float(usdt_per_grid / current_price)
+
+        # 重新计算每格的下单数量（保持 Decimal 精度）
+        qty_dec = (usdt_per_grid / current_price).quantize(Decimal("0.000001"), rounding=ROUND_UP)
+        self.cfg.update_qty(qty_dec)
+
         print(f"[REAL_SIM_BOOT] 每网格投入: {usdt_per_grid:.2f} USDT")
-        print(f"[REAL_SIM_BOOT] 每单数量: {self.cfg.qty:.6f}")
+        print(f"[REAL_SIM_BOOT] 每单数量: {float(self.cfg.qty):.6f}")
 
         have_u = self.api.balance_of("USDT")
         base_asset = self.cfg.symbol.replace("USDT", "")
@@ -106,8 +109,8 @@ class RealPriceGridEngine:
         if have_a > 0:  # 如果有基础币，可以设置卖单
             base_available = have_a
             
-            # 从当前网格的上一个网格开始设置卖单
-            for i in range(1, max_orders_per_side + 1):
+            # 从当前价格所在网格开始，逐级向上设置卖单
+            for i in range(max_orders_per_side):
                 grid_idx = current_grid_idx + i
                 if grid_idx >= self.cfg.N:  # 超出网格上界
                     break
@@ -171,23 +174,31 @@ class RealPriceGridEngine:
         self._save_state()
 
     # ---------------- 下单 - 修复版 ----------------
-    def _place(self, side, price: Decimal, grid_idx: int):
+    def _place(self, side, price: Decimal, grid_idx: int, qty: Decimal = None):
+        """在指定网格下单。如果 qty 为空，则使用 cfg.qty"""
+        qty = qty or self.cfg.qty
+        
+        # ----------- 重复挂单检查 -----------
+        if self._order_exists(grid_idx, side):
+            print(f"[REAL_SIM_ORDER] 已存在 {side} 挂单于网格 {grid_idx}，跳过重复下单")
+            return
+        
         # 确保网格索引有效
         if not self.cfg.is_valid_grid_index(grid_idx):
             print(f"[REAL_SIM_ORDER] 网格索引 {grid_idx} 无效，跳过下单")
             return
             
         # 确保下单价值合理
-        order_value = price * Decimal(self.cfg.qty)
+        order_value = price * qty
         min_order_value = Decimal("50")  # 最小订单价值50 USDT
         
         if order_value < min_order_value:
-            # 调整数量以满足最小订单价值
-            self.cfg.qty = float(min_order_value / price)
-            order_value = min_order_value
-            print(f"[REAL_SIM_ORDER] 调整订单数量为 {self.cfg.qty:.6f} 以满足最小价值要求")
+            # 动态调整本次下单数量（不影响全局 cfg.qty）
+            qty = (min_order_value / price).quantize(Decimal("0.000001"), rounding=ROUND_UP)
+            order_value = price * qty
+            print(f"[REAL_SIM_ORDER] 调整订单数量为 {float(qty):.6f} 以满足最小价值要求")
             
-        print(f"[REAL_SIM_ORDER] 准备下单: {side} {self.cfg.qty:.6f} @ {price:.6f}, 价值: {order_value:.2f} USDT (网格 {grid_idx})")
+        print(f"[REAL_SIM_ORDER] 准备下单: {side} {float(qty):.6f} @ {price:.6f}, 价值: {order_value:.2f} USDT (网格 {grid_idx})")
         
         # 检查余额
         if side == "BUY":
@@ -198,15 +209,15 @@ class RealPriceGridEngine:
         else:  # SELL
             base_asset = self.cfg.symbol.replace("USDT", "")
             available_base = self.api.balance_of(base_asset)
-            if available_base < Decimal(self.cfg.qty):
-                print(f"[REAL_SIM_ORDER] {base_asset}余额不足: {available_base:.6f} < {self.cfg.qty:.6f}")
+            if available_base < qty:
+                print(f"[REAL_SIM_ORDER] {base_asset}余额不足: {available_base:.6f} < {float(qty):.6f}")
                 return
         
         try:
-            r = self.api.place_limit(side, float(price), self.cfg.qty, grid_idx)
+            r = self.api.place_limit(side, float(price), float(qty), grid_idx)
             order_id = str(r["orderId"])
             self.open_orders[order_id] = (grid_idx, side)
-            print(f"[REAL_SIM_ORDER] 订单成功: {order_id} - {side} {self.cfg.qty:.6f} @ {price:.6f} (网格 {grid_idx})")
+            print(f"[REAL_SIM_ORDER] 订单成功: {order_id} - {side} {float(qty):.6f} @ {price:.6f} (网格 {grid_idx})")
             self._save_state()
         except Exception as e:
             print("[REAL_SIM_ORDER‑ERR]", e)
@@ -241,7 +252,8 @@ class RealPriceGridEngine:
                 if deal_side == "BUY":
                     # 买单成交，在同一网格设置卖单
                     sell_price = self.cfg.get_sell_price(grid_idx)
-                    self._place("SELL", sell_price, grid_idx)
+                    if not self._order_exists(grid_idx, "SELL"):
+                        self._place("SELL", sell_price, grid_idx)
                     print(f"[REAL_SIM_TRADE] 买单成交后设置卖单: 网格{grid_idx} @ {sell_price:.6f}")
                     
                 elif deal_side == "SELL":
@@ -249,7 +261,8 @@ class RealPriceGridEngine:
                     lower_grid = self.cfg.get_adjacent_grid(grid_idx, "down")
                     if lower_grid >= 0:
                         buy_price = self.cfg.get_buy_price(lower_grid)
-                        self._place("BUY", buy_price, lower_grid)
+                        if not self._order_exists(lower_grid, "BUY"):
+                            self._place("BUY", buy_price, lower_grid)
                         print(f"[REAL_SIM_TRADE] 卖单成交后设置买单: 网格{lower_grid} @ {buy_price:.6f}")
                     else:
                         print(f"[REAL_SIM_TRADE] 卖单成交但无法在更低网格设置买单（已达底部）")
@@ -284,15 +297,56 @@ class RealPriceGridEngine:
         try:
             with open(REAL_GRID_STATE_FILE, "r") as f:
                 d = json.load(f)
+
+            # ---------- 1. 先恢复 GridConfig ----------
+            saved_cfg = d.get("cfg")
+            if saved_cfg:
+                # 若保存的 symbol 与当前实例 symbol 不一致，跳过恢复，防止价格/订单错乱
+                if saved_cfg.get("symbol") != self.cfg.symbol:
+                    print(
+                        f"[REAL_SIM_STATE] 检测到历史 symbol={saved_cfg.get('symbol')} 与当前 {self.cfg.symbol} 不一致，忽略旧配置"
+                    )
+                else:
+                    try:
+                        # 将字符串字段转换为 float/int
+                        self.cfg = GridConfig(
+                            symbol=saved_cfg.get("symbol", self.cfg.symbol),
+                            lower_price=float(saved_cfg.get("lo", self.cfg.lo)),
+                            upper_price=float(saved_cfg.get("hi", self.cfg.hi)),
+                            grids=int(saved_cfg.get("N", self.cfg.N)),
+                            mode=saved_cfg.get("mode", self.cfg.mode),
+                            fee_rate=float(saved_cfg.get("fee", self.cfg.fee)),
+                            qty=float(saved_cfg.get("qty", self.cfg.qty)),
+                            trailing_k=int(saved_cfg.get("k", self.cfg.k)),
+                        )
+                        print(
+                            f"[REAL_SIM_STATE] 已恢复 GridConfig: {self.cfg.symbol} "
+                            f"区间[{self.cfg.lo}~{self.cfg.hi}], N={self.cfg.N}"
+                        )
+                    except Exception as e:
+                        print(f"[REAL_SIM_STATE-ERR] 恢复 GridConfig 失败: {e}")
+
+            # ---------- 2. 其它核心字段 ----------
             self.pnl_real = Decimal(d.get("pnl", "0"))
             self.pairs = d.get("pairs", 0)
             self.start_ts = d.get("start_ts", time.time())
             self.invest_usdt = Decimal(d.get("invest_usdt", "10000"))
             self.req_base = Decimal(d.get("req_base", "0"))
-            self.open_orders = {k: tuple(v) for k, v in d.get("orders", {}).items()}
-            print(f"[REAL_SIM_STATE] 恢复 {len(self.open_orders)} 个挂单")
+
+            # 恢复挂单
+            raw_orders = {k: tuple(v) for k, v in d.get("orders", {}).items()}
+            # ---------- 3. 校验挂单索引 ----------
+            valid_orders = {}
+            invalid_cnt = 0
+            for oid, (idx, side) in raw_orders.items():
+                if self.cfg.is_valid_grid_index(idx):
+                    valid_orders[oid] = (idx, side)
+                else:
+                    invalid_cnt += 1
+            self.open_orders = valid_orders
+            print(f"[REAL_SIM_STATE] 恢复 {len(self.open_orders)} 个挂单, 丢弃 {invalid_cnt} 个越界挂单")
         except Exception as e:
-            print("[REAL_SIM_STATE‑ERR]", e)
+            print("[REAL_SIM_STATE-ERR]", e)
             self.open_orders.clear()
 
     # ---------------- Autosave ----------------
@@ -368,4 +422,9 @@ class RealPriceGridEngine:
     def stop(self):
         """停止网格引擎"""
         self.ws.stop()
-        print("[REAL_SIM_STOP] 网格引擎已停止") 
+        print("[REAL_SIM_STOP] 网格引擎已停止")
+
+    # ----------- 工具函数 -----------
+    def _order_exists(self, grid_idx:int, side:str):
+        """检查当前是否已有指定网格+方向的挂单"""
+        return any(g == grid_idx and s == side for g, s in self.open_orders.values()) 
