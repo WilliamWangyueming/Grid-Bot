@@ -1,9 +1,0 @@
-@echo off
-echo 🔮 启动LSTM价格预测系统...
-echo ===================================
-cd /d "%~dp0"
-echo 📱 正在启动Streamlit服务器...
-echo 🌐 将自动打开浏览器页面...
-start http://localhost:8502
-streamlit run price_prediction_system.py --server.port 8502 --server.headless false --browser.gatherUsageStats false
-pause 

@@ -1,24 +1,25 @@
 requests>=2.31.0
-websocket-client==1.8.0
 pandas>=2.0.0
-streamlit>=1.28.0
-streamlit-autorefresh==0.0.1
-python-dotenv==1.0.1
+streamlit>=1.28.0,<1.30.0
 plotly>=5.15.0
-pyyaml==6.0.1
-torch>=2.0.0
-numpy>=1.24.0
+torch>=2.0.0,<2.2.0
+torchvision>=0.15.0,<0.17.0
+numpy>=1.24.0,<1.26.0
 scikit-learn>=1.3.0
 yfinance>=0.2.0
 python-dateutil>=2.8.0
-pytz>=2023.3
-joblib>=1.3.0
 
-# 可选依赖（推荐安装以获得最佳性能）
-# TA-Lib>=0.4.0  # 技术分析库，如安装失败系统会使用pandas备用实现
+# Optional dependencies for better performance
+# TA-Lib>=0.4.0  # Technical analysis library; fallback to pandas if installation fails
 # 
-# Windows TA-Lib 安装指南:
-# 1. conda install -c conda-forge ta-lib  (推荐)
-# 2. 或下载预编译whl: https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
+# Windows TA-Lib installation guide:
+# 1. conda install -c conda-forge ta-lib  (recommended)
+# 2. Download precompiled whl from: https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
 # 
-# 详细安装指南请参考: INSTALL_TALIB.md 
+# For detailed installation guide please refer to: INSTALL_TALIB.md
+
+# Additional dependencies to resolve compatibility issues
+protobuf>=3.20.0,<4.0.0
+psutil>=5.9.0  # For better process management
+
+ccxt>=4.0.0  # crypto multi-exchange data fetcher 
